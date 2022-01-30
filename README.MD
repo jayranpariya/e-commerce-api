@@ -45,7 +45,8 @@ https://e-commerce-api-101.herokuapp.com/api/v1/products/:id -> patch => updateP
 
 https://e-commerce-api-101.herokuapp.com/api/v1/products/:id -> delete => deleteProduct => only admin
 
-// prodduct review
+prodduct review
+
 https://e-commerce-api-101.herokuapp.com/api/v1/products/:id/review -> get => getsingleproductreview
 
 
