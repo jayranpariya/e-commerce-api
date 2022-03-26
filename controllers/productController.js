@@ -28,6 +28,7 @@ const getSingleProduct = async (req, res) => {
   }
   res.status(StatusCodes.OK).json({ product });
 };
+
 const updateProduct = async (req, res) => {
   const { id: productId } = req.params;
 

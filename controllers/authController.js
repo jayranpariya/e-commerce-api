@@ -1,7 +1,13 @@
 const User = require("../models/User");
+const Token = require("../models/Token");
 const { StatusCodes } = require("http-status-codes");
 const CusttomError = require("../errors");
-const { attachCookiesToResponse, createTokenUser } = require("../utils");
+const {
+  attachCookiesToResponse,
+  createTokenUser,
+  sendVerficationEmail,
+} = require("../utils");
+const crypto = require("crypto");
 
 const register = async (req, res) => {
   const { email, name, password } = req.body;
@@ -16,11 +22,64 @@ const register = async (req, res) => {
   const isFirstAccount = (await User.countDocuments({})) === 0;
   const role = isFirstAccount ? "admin" : "user";
 
-  const user = await User.create({ email, name, password, role });
-  const tokenUser = createTokenUser(user);
-  attachCookiesToResponse({ res, user: tokenUser });
-  res.status(StatusCodes.CREATED).json({ user: tokenUser });
+  const verificationToken = crypto.randomBytes(40).toString("hex");
+
+  const user = await User.create({
+    email,
+    name,
+    password,
+    role,
+    verificationToken,
+  });
+
+  const origin = "http://localhost:3000";
+
+  // const protocol = req.protocol;
+  // console.log(`protocol: ${protocol}`);
+  // const host = req.get("host");
+  // console.log("host" + host);
+
+  // const forwardeHost = req.get("x-forwarded-host");
+  // const forwardeProtocol = req.get("x-forwarded-proto");
+  // console.log(`forwardeHost: ${forwardeHost}`);
+  // console.log(`forwardeProtocol: ${forwardeProtocol}`);
+
+  await sendVerficationEmail({
+    name: user.name,
+    email: user.email,
+    verificationToken: user.verificationToken,
+    origin,
+  });
+  ///send verification token back only whilr testing in postmane||
+  res.status(StatusCodes.CREATED).json({
+    msg: "success! please check your email to verify account",
+  });
+
+  // const tokenUser = createTokenUser(user);
+  // attachCookiesToResponse({ res, user: tokenUser });
+  // res.status(StatusCodes.CREATED).json({ user: tokenUser });
+
   //   res.send("register user");
+};
+
+const verifyEmail = async (req, res) => {
+  const { verificationToken, email } = req.body;
+
+  const user = await User.findOne({ email });
+  if (!user) {
+    throw new CusttomError.UnauthenticatedError("verification Failed");
+  }
+
+  if (user.verificationToken !== verificationToken) {
+    throw new CusttomError.UnauthenticatedError("verification Failed");
+  }
+
+  user.isVerified = true;
+  user.verified = Date.now();
+  user.verificationToken = "";
+  await user.save();
+
+  res.status(StatusCodes.OK).json({ msg: "Email Verified" });
 };
 
 const login = async (req, res) => {
@@ -34,6 +93,10 @@ const login = async (req, res) => {
     throw new CusttomError.UnauthenticatedError("Invalid Credentials");
   }
 
+  if (!user.isVerified) {
+    throw new CusttomError.UnauthenticatedError("plz verified a email");
+  }
+
   const isPasswordCorrect = await user.comparePassword(password);
 
   if (!isPasswordCorrect) {
@@ -41,13 +104,45 @@ const login = async (req, res) => {
   }
 
   const tokenUser = createTokenUser(user);
-  attachCookiesToResponse({ res, user: tokenUser });
+
+  //create refresh token
+  let refreshToken = "";
+
+  const existingToken = await Token.findOne({ user: user._id });
+  if (existingToken) {
+    const { isValid } = existingToken;
+    if (!isValid) {
+      throw new CusttomError.UnauthenticatedError("Invalid Credentials");
+    }
+    refreshToken = existingToken.refreshToken;
+    attachCookiesToResponse({ res, user: tokenUser, refreshToken });
+    res.status(StatusCodes.OK).json({ user: tokenUser });
+    return;
+  }
+
+  refreshToken = crypto.randomBytes(40).toString("hex");
+
+  const userAgent = req.headers["user-agent"];
+  const ip = req.ip;
+  const userToken = { refreshToken, ip, userAgent, user: user._id };
+  await Token.create(userToken);
+  //check for existing token
+
+  attachCookiesToResponse({ res, user: tokenUser, refreshToken });
   res.status(StatusCodes.OK).json({ user: tokenUser });
   // res.send(req);
 };
 
 const logout = async (req, res) => {
-  res.cookie("token", "logout", {
+  await Token.findOneAndDelete({
+    user: req.user.userId,
+  });
+
+  res.cookie("accessToken", "logout", {
+    httpOnly: true,
+    expires: new Date(Date.now()),
+  });
+  res.cookie("refreshToken", "logout", {
     httpOnly: true,
     expires: new Date(Date.now()),
   });
@@ -59,4 +154,5 @@ module.exports = {
   register,
   login,
   logout,
+  verifyEmail,
 };
